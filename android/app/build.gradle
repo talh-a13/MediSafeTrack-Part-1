@@ -1,0 +1,62 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+// Apply protobuf plugin separately
+apply plugin: 'com.google.protobuf'
+
+android {
+    namespace 'com.example.flutter_blue'
+    compileSdkVersion 34
+
+    // Ensure NDK version exists before assigning
+    ndkVersion = flutter.ndkVersion ?: "25.1.8937393"
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_1_8
+    }
+
+    defaultConfig {
+        applicationId "com.example.flutter_blue"  // Ensure this matches the namespace
+        minSdk = flutter.minSdkVersion
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    buildTypes {
+        release {
+            // Ensure a proper signing config is used
+            signingConfig signingConfigs.debug
+        }
+    }
+}
+
+// Exclude protobuf-javalite to prevent duplicate class issues
+configurations.all {
+    exclude group: 'com.google.protobuf', module: 'protobuf-javalite'
+}
+
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.21.12'
+    }
+    generateProtoTasks {
+        all().configureEach { task ->
+            task.builtins {
+                java {}
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation 'com.google.protobuf:protobuf-java:3.21.12'
+}

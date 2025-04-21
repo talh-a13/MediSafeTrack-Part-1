@@ -1,0 +1,39 @@
+PODS:
+  - flutter_blue (0.0.1):
+    - flutter_blue/Protos (= 0.0.1)
+    - FlutterMacOS
+  - flutter_blue/Protos (0.0.1):
+    - FlutterMacOS
+    - Protobuf (~> 3.11.4)
+  - FlutterMacOS (1.0.0)
+  - Protobuf (3.11.4)
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - flutter_blue (from `Flutter/ephemeral/.symlinks/plugins/flutter_blue/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin`)
+
+SPEC REPOS:
+  trunk:
+    - Protobuf
+
+EXTERNAL SOURCES:
+  flutter_blue:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_blue/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  shared_preferences_foundation:
+    :path: Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin
+
+SPEC CHECKSUMS:
+  flutter_blue: 90e21dbf8175d66f6eb04fd72b4244f6302148c0
+  FlutterMacOS: 8f6f14fa908a6fb3fba0cd85dbd81ec4b251fb24
+  Protobuf: 176220c526ad8bd09ab1fb40a978eac3fef665f7
+  shared_preferences_foundation: 9e1978ff2562383bd5676f64ec4e9aa8fa06a6f7
+
+PODFILE CHECKSUM: 236401fc2c932af29a9fcf0e97baeeb2d750d367
+
+COCOAPODS: 1.16.2
