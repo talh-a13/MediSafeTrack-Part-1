@@ -16,70 +16,175 @@ class SensorPage extends StatefulWidget {
 class _SensorPageState extends State<SensorPage> {
   String service_uuid = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
   String characteristic_uuid = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-  late bool isReady;
+
+  bool isReady = false;
+  bool isConnecting = true;
+  bool hasError = false;
+  String? errorMessage;
+
   late Stream<List<int>> stream;
-  late List<String> _temphumidata;
   double _temp = 0;
   double _humidity = 0;
+
+  Timer? _connectionTimer;
+  StreamSubscription<BluetoothDeviceState>? _deviceStateSubscription;
 
   @override
   void initState() {
     super.initState();
-    isReady = false;
-    connectToDevice();
+    _initializeConnection();
   }
 
   @override
   void dispose() {
-    widget.device.disconnect();
+    _connectionTimer?.cancel();
+    _deviceStateSubscription?.cancel();
+    _disconnectFromDevice();
     super.dispose();
   }
 
-  void connectToDevice() async {
-    Timer(const Duration(seconds: 15), () {
-      if (!isReady) {
-        disconnectFromDevice();
-        _pop();
+  void _initializeConnection() {
+    _deviceStateSubscription = widget.device.state.listen((state) {
+      if (state == BluetoothDeviceState.disconnected && mounted) {
+        setState(() {
+          isReady = false;
+          isConnecting = false;
+          hasError = true;
+          errorMessage = 'Device disconnected unexpectedly';
+        });
+      }
+    });
+
+    _connectToDevice();
+  }
+
+  void _connectToDevice() async {
+    setState(() {
+      isConnecting = true;
+      hasError = false;
+      errorMessage = null;
+    });
+
+    _connectionTimer = Timer(const Duration(seconds: 15), () {
+      if (!isReady && mounted) {
+        setState(() {
+          isConnecting = false;
+          hasError = true;
+          errorMessage = 'Connection timeout';
+        });
       }
     });
 
     try {
-      await widget.device.connect();
-      discoverServices();
+      var deviceState = await widget.device.state.first;
+      if (deviceState != BluetoothDeviceState.connected) {
+        await widget.device.connect();
+      }
+
+      await _discoverServices();
     } catch (e) {
       print('Connection error: $e');
-      _pop();
+      if (mounted) {
+        setState(() {
+          isConnecting = false;
+          hasError = true;
+          errorMessage = 'Connection failed: ${e.toString()}';
+        });
+      }
     }
   }
 
-  void disconnectFromDevice() {
-    widget.device.disconnect();
+  void _disconnectFromDevice() {
+    try {
+      widget.device.disconnect();
+    } catch (e) {
+      print('Disconnect error: $e');
+    }
   }
 
-  void discoverServices() async {
+  Future<void> _discoverServices() async {
     try {
       List<BluetoothService> services = await widget.device.discoverServices();
+
+      bool serviceFound = false;
       for (var service in services) {
         if (service.uuid.toString() == service_uuid) {
           for (var characteristic in service.characteristics) {
             if (characteristic.uuid.toString() == characteristic_uuid) {
-              characteristic.setNotifyValue(true);
+              await characteristic.setNotifyValue(true);
               stream = characteristic.value;
 
-              setState(() {
-                isReady = true;
-              });
+              stream.listen(
+                (data) {
+                  if (mounted) {
+                    _processData(data);
+                  }
+                },
+                onError: (error) {
+                  print('Data stream error: $error');
+                  if (mounted) {
+                    setState(() {
+                      hasError = true;
+                      errorMessage = 'Data stream error: $error';
+                    });
+                  }
+                },
+              );
+
+              serviceFound = true;
+              break;
             }
           }
+          if (serviceFound) break;
         }
       }
 
-      if (!isReady) {
-        _pop();
+      if (serviceFound) {
+        _connectionTimer?.cancel();
+        if (mounted) {
+          setState(() {
+            isReady = true;
+            isConnecting = false;
+            hasError = false;
+            errorMessage = null;
+          });
+        }
+      } else {
+        throw Exception('Required service or characteristic not found');
       }
     } catch (e) {
       print('Service discovery error: $e');
-      _pop();
+      if (mounted) {
+        setState(() {
+          isConnecting = false;
+          hasError = true;
+          errorMessage = 'Service discovery failed: ${e.toString()}';
+        });
+      }
+    }
+  }
+
+  void _processData(List<int> data) {
+    try {
+      String currentValue = utf8.decode(data);
+      List<String> tempHumiData = currentValue.split(",");
+
+      if (tempHumiData.length >= 2) {
+        String tempRaw = tempHumiData[0].replaceAll(RegExp(r'[^0-9.]'), '');
+        String humidityRaw = tempHumiData[1].replaceAll(RegExp(r'[^0-9.]'), '');
+
+        double newTemp = double.tryParse(tempRaw) ?? 0.0;
+        double newHumidity = double.tryParse(humidityRaw) ?? 0.0;
+
+        if (mounted) {
+          setState(() {
+            _temp = newTemp;
+            _humidity = newHumidity;
+          });
+        }
+      }
+    } catch (e) {
+      print('Data processing error: $e');
     }
   }
 
@@ -96,7 +201,7 @@ class _SensorPageState extends State<SensorPage> {
           ),
           TextButton(
             onPressed: () {
-              disconnectFromDevice();
+              _disconnectFromDevice();
               Navigator.of(context).pop(true);
             },
             child: const Text('Yes'),
@@ -107,12 +212,8 @@ class _SensorPageState extends State<SensorPage> {
     return result ?? false;
   }
 
-  void _pop() {
-    Navigator.of(context).pop(true);
-  }
-
-  String _dataParser(List<int> dataFromDevice) {
-    return utf8.decode(dataFromDevice);
+  void _retryConnection() {
+    _connectToDevice();
   }
 
   @override
@@ -122,67 +223,95 @@ class _SensorPageState extends State<SensorPage> {
       child: Scaffold(
         appBar: AppBar(
           title: Text('Data from ${widget.device.name}'),
-        ),
-        body: !isReady
-            ? const Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 20),
-                    Text(
-                      "Connecting...",
-                      style: TextStyle(fontSize: 24, color: Colors.blue),
-                    ),
-                  ],
-                ),
-              )
-            : StreamBuilder<List<int>>(
-                stream: stream,
-                builder:
-                    (BuildContext context, AsyncSnapshot<List<int>> snapshot) {
-                  if (snapshot.hasError) {
-                    return Text('Error: ${snapshot.error}');
-                  }
-
-                  if (snapshot.connectionState == ConnectionState.active &&
-                      snapshot.hasData) {
-                    var currentValue = _dataParser(snapshot.data!);
-                    _temphumidata = currentValue.split(",");
-
-                    if (_temphumidata.isNotEmpty && _temphumidata.length >= 2) {
-                      String tempRaw =
-                          _temphumidata[0].replaceAll(RegExp(r'[^0-9.]'), '');
-                      String humidityRaw =
-                          _temphumidata[1].replaceAll(RegExp(r'[^0-9.]'), '');
-
-                      _temp = double.tryParse(tempRaw) ?? 0.0;
-                      _humidity = double.tryParse(humidityRaw) ?? 0.0;
-                    }
-
-                    return HomeUI(
-                      key: Key('home_ui'),
-                      humidity: _humidity,
-                      temperature: _temp,
-                    );
-                  } else {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircularProgressIndicator(),
-                          SizedBox(height: 20),
-                          Text(
-                            "Waiting for data...",
-                            style: TextStyle(fontSize: 18),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-                },
+          actions: [
+            if (hasError)
+              IconButton(
+                icon: Icon(Icons.refresh),
+                onPressed: _retryConnection,
+                tooltip: 'Retry connection',
               ),
+          ],
+        ),
+        body: _buildBody(),
       ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (isConnecting) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 20),
+            Text(
+              "Connecting...",
+              style: TextStyle(fontSize: 24, color: Colors.blue),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (hasError) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 64,
+              color: Colors.red,
+            ),
+            SizedBox(height: 20),
+            Text(
+              'Connection Error',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.red,
+              ),
+            ),
+            SizedBox(height: 10),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                errorMessage ?? 'Unknown error occurred',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16),
+              ),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _retryConnection,
+              child: Text('Retry Connection'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!isReady) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 20),
+            Text(
+              "Waiting for data...",
+              style: TextStyle(fontSize: 18),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return HomeUI(
+      key: Key('home_ui'),
+      humidity: _humidity,
+      temperature: _temp,
     );
   }
 }

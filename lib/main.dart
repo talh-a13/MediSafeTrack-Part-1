@@ -4,7 +4,6 @@ import 'package:flutter_blue/flutter_blue.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:temperaturemonitor/device_manager.dart';
 import 'package:temperaturemonitor/sensor.dart';
-
 import 'multi_device_daskhboard.dart';
 
 void main() async {
@@ -34,7 +33,6 @@ Future<void> _requestPermissions() async {
     } else if (entry.value.isPermanentlyDenied) {
       print('Permission permanently denied: ${entry.key}');
       allGranted = false;
-      // Open app settings for manually granting permissions
       await openAppSettings();
     }
   }
@@ -104,13 +102,127 @@ class FindDevicesScreen extends StatefulWidget {
 }
 
 class _FindDevicesScreenState extends State<FindDevicesScreen> {
-  DeviceManager deviceManager = DeviceManager();
+  DeviceManager deviceManager = DeviceManager(
+    cloudEndpoint: "http://64.227.152.123:8000/data",
+  );
 
   @override
   void initState() {
     super.initState();
-    // Start scanning when the screen is loaded
     FlutterBlue.instance.startScan(timeout: Duration(seconds: 4));
+    deviceManager.addListener(_onDeviceManagerUpdate);
+  }
+
+  @override
+  void dispose() {
+    deviceManager.removeListener(_onDeviceManagerUpdate);
+    super.dispose();
+  }
+
+  void _onDeviceManagerUpdate() {
+    setState(() {});
+  }
+
+  Future<void> _connectToDevice(BluetoothDevice device) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 20),
+              Text(
+                "Connecting to ${device.name}",
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      bool success = await deviceManager.addOrUpdateDevice(device);
+      Navigator.of(context).pop();
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${device.name} connected successfully!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      } else {
+        DeviceData? deviceData = deviceManager.getDevice(device.id.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Failed to connect: ${deviceData?.errorMessage ?? "Unknown error"}'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+            action: SnackBarAction(
+              label: 'Retry',
+              onPressed: () => _connectToDevice(device),
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Connection failed: $e'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  void _navigateToSensorPage(BluetoothDevice device) {
+    DeviceData? deviceData = deviceManager.getDevice(device.id.id);
+    if (deviceData != null && deviceData.isReady) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => SensorPage(
+            device: device,
+            key: Key('sensor_page_${device.id}'),
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Device is not ready yet. Please wait...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _navigateToDashboard() {
+    if (deviceManager.connectedDevices.isNotEmpty) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => MultiDeviceDashboard(
+            deviceManager: deviceManager,
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Connect to at least one device first'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   @override
@@ -119,25 +231,37 @@ class _FindDevicesScreenState extends State<FindDevicesScreen> {
       appBar: AppBar(
         title: Text('Find Devices'),
         actions: [
-          IconButton(
-            icon: Icon(Icons.dashboard),
-            onPressed: () {
-              if (deviceManager.connectedDevices.isNotEmpty) {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => MultiDeviceDashboard(
-                      deviceManager: deviceManager,
+          Stack(
+            children: [
+              IconButton(
+                icon: Icon(Icons.dashboard),
+                onPressed: _navigateToDashboard,
+              ),
+              if (deviceManager.connectedDevices.isNotEmpty)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    padding: EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    constraints: BoxConstraints(
+                      minWidth: 16,
+                      minHeight: 16,
+                    ),
+                    child: Text(
+                      '${deviceManager.connectedDevices.length}',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
                   ),
-                );
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Connect to at least one device first'),
-                  ),
-                );
-              }
-            },
+                ),
+            ],
           ),
         ],
       ),
@@ -147,18 +271,52 @@ class _FindDevicesScreenState extends State<FindDevicesScreen> {
         child: SingleChildScrollView(
           child: Column(
             children: <Widget>[
-              StreamBuilder<List<BluetoothDevice>>(
-                stream: Stream.periodic(Duration(seconds: 2))
-                    .asyncMap((_) => FlutterBlue.instance.connectedDevices),
-                initialData: [],
-                builder: (c, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return CircularProgressIndicator();
-                  }
+              AnimatedBuilder(
+                animation: deviceManager,
+                builder: (context, child) {
+                  List<DeviceData> connectedDevices =
+                      deviceManager.connectedDevices;
+                  List<DeviceData> connectingDevices =
+                      deviceManager.connectingDevices;
 
                   List<Widget> tiles = [];
 
-                  if (snapshot.data!.isNotEmpty) {
+                  if (connectingDevices.isNotEmpty) {
+                    tiles.add(
+                      Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Text(
+                          'Connecting Devices',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Colors.orange,
+                          ),
+                        ),
+                      ),
+                    );
+
+                    tiles.addAll(
+                      connectingDevices.map((deviceData) => ListTile(
+                            title: Text(deviceData.device.name.isEmpty
+                                ? "Unknown Device"
+                                : deviceData.device.name),
+                            subtitle: Text('Connecting...'),
+                            leading: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            trailing: IconButton(
+                              icon: Icon(Icons.cancel),
+                              onPressed: () => deviceManager
+                                  .removeDevice(deviceData.device.id.id),
+                            ),
+                          )),
+                    );
+                  }
+
+                  if (connectedDevices.isNotEmpty) {
                     tiles.add(
                       Padding(
                         padding: EdgeInsets.all(8.0),
@@ -167,68 +325,40 @@ class _FindDevicesScreenState extends State<FindDevicesScreen> {
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
+                            color: Colors.green,
                           ),
                         ),
                       ),
                     );
-                  }
 
-                  tiles.addAll(
-                    snapshot.data!.map(
-                      (d) => ListTile(
-                        title: Text(d.name.isEmpty ? "Unknown Device" : d.name),
-                        subtitle: Text(d.id.toString()),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            StreamBuilder<BluetoothDeviceState>(
-                              stream: d.state,
-                              initialData: BluetoothDeviceState.disconnected,
-                              builder: (c, snapshot) {
-                                if (snapshot.connectionState ==
-                                    ConnectionState.waiting) {
-                                  return SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  );
-                                }
-                                return Text(
-                                    snapshot.data.toString().split('.')[1]);
-                              },
+                    tiles.addAll(
+                      connectedDevices.map((deviceData) => ListTile(
+                            title: Text(deviceData.device.name.isEmpty
+                                ? "Unknown Device"
+                                : deviceData.device.name),
+                            subtitle: Text(
+                                'Temperature: ${deviceData.temperature.toStringAsFixed(1)}°C, '
+                                'Humidity: ${deviceData.humidity.toStringAsFixed(1)}%'),
+                            leading:
+                                Icon(Icons.check_circle, color: Colors.green),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: Icon(Icons.info),
+                                  onPressed: () =>
+                                      _navigateToSensorPage(deviceData.device),
+                                ),
+                                IconButton(
+                                  icon: Icon(Icons.close, color: Colors.red),
+                                  onPressed: () => deviceManager
+                                      .removeDevice(deviceData.device.id.id),
+                                ),
+                              ],
                             ),
-                            SizedBox(width: 10),
-                            IconButton(
-                              icon: Icon(Icons.info),
-                              onPressed: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (context) {
-                                      return SensorPage(
-                                        device: d,
-                                        key: Key('sensor_page_${d.id}'),
-                                      );
-                                    },
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                        onTap: () {
-                          deviceManager.addOrUpdateDevice(d);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('${d.name} is being monitored'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  );
+                          )),
+                    );
+                  }
 
                   return Column(children: tiles);
                 },
@@ -243,7 +373,13 @@ class _FindDevicesScreenState extends State<FindDevicesScreen> {
 
                   List<Widget> tiles = [];
 
-                  if (snapshot.data!.isNotEmpty) {
+                  var availableDevices = snapshot.data!
+                      .where((r) => r.device.name.isNotEmpty)
+                      .where((r) =>
+                          !deviceManager.devices.containsKey(r.device.id.id))
+                      .toList();
+
+                  if (availableDevices.isNotEmpty) {
                     tiles.add(
                       Padding(
                         padding: EdgeInsets.all(8.0),
@@ -259,42 +395,40 @@ class _FindDevicesScreenState extends State<FindDevicesScreen> {
                   }
 
                   tiles.addAll(
-                    snapshot.data!
-                        .where((r) => r.device.name.isNotEmpty)
-                        .map(
-                          (r) => ListTile(
-                            title: Text(r.device.name),
-                            subtitle: Text(r.device.id.toString()),
-                            trailing: ElevatedButton(
-                              child: Text('CONNECT'),
-                              onPressed: r.advertisementData.connectable
-                                  ? () async {
-                                      try {
-                                        await r.device.connect();
-                                        deviceManager
-                                            .addOrUpdateDevice(r.device);
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                                'Connected to ${r.device.name}'),
-                                          ),
-                                        );
-                                      } catch (e) {
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(
-                                          SnackBar(
-                                            content:
-                                                Text('Error connecting: $e'),
-                                          ),
-                                        );
-                                      }
-                                    }
-                                  : null,
-                            ),
+                    availableDevices.map(
+                      (r) => Card(
+                        child: Padding(
+                          padding: EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                r.device.name,
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                r.device.id.toString(),
+                                style: TextStyle(color: Colors.grey[600]),
+                              ),
+                              SizedBox(height: 8),
+                              Text('RSSI: ${r.rssi}'),
+                              SizedBox(height: 12),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton(
+                                  child: Text('CONNECT'),
+                                  onPressed: r.advertisementData.connectable
+                                      ? () => _connectToDevice(r.device)
+                                      : null,
+                                ),
+                              ),
+                            ],
                           ),
-                        )
-                        .toList(),
+                        ),
+                      ),
+                    ),
                   );
 
                   return Column(children: tiles);
