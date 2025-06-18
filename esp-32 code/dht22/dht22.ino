@@ -4,28 +4,29 @@
 #include <BLE2902.h>
 #include <DHT.h>
 
-#define DHTPIN 7      // Define GPIO pin for DHT22
-#define DHTTYPE DHT22 // Change sensor type to DHT22
+#define DHTPIN 26      // GPIO pin for DHT22 (Change this if needed)
+#define DHTTYPE DHT22  // Sensor type
 
 DHT dht(DHTPIN, DHTTYPE);
 BLEServer* pServer = NULL;
 BLECharacteristic* pCharacteristic = NULL;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
-float prev_temp = -1000;  // Initialize to an unlikely value
-float prev_humidity = -1000;
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
+// BLE Callbacks
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
-      BLEDevice::startAdvertising();
+      Serial.println("BLE Client Connected!");
     };
 
     void onDisconnect(BLEServer* pServer) {
       deviceConnected = false;
+      Serial.println("BLE Client Disconnected! Restarting advertising...");
+      pServer->getAdvertising()->start();  // Restart advertising after disconnection
     }
 };
 
@@ -34,13 +35,11 @@ void setup() {
   dht.begin();
 
   // Initialize BLE
-  BLEDevice::init("ESP32 DHT22 Sensor");
-
+  BLEDevice::init("ESP32 SD 1");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
   BLEService *pService = pServer->createService(SERVICE_UUID);
-
   pCharacteristic = pService->createCharacteristic(
                       CHARACTERISTIC_UUID,
                       BLECharacteristic::PROPERTY_READ |
@@ -48,13 +47,13 @@ void setup() {
                     );
 
   pCharacteristic->addDescriptor(new BLE2902());
-
   pService->start();
 
+  // Start BLE Advertising
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(false);
-  pAdvertising->setMinPreferred(0x0);
+  pAdvertising->setMinPreferred(0x06);  // Improve connection reliability
   BLEDevice::startAdvertising();
 
   Serial.println("Waiting for a BLE client to connect...");
@@ -65,31 +64,24 @@ void loop() {
   float humidity = dht.readHumidity();
 
   if (isnan(temperature) || isnan(humidity)) {
-    Serial.println("Failed to read from DHT sensor!");
+    Serial.println("❌ Failed to read from DHT sensor!");
+    delay(2000);
     return;
   }
 
-  if (deviceConnected && (temperature != prev_temp || humidity != prev_humidity)) {
-    prev_temp = temperature;
-    prev_humidity = humidity;
+  Serial.print("✅ Temperature: ");
+  Serial.print(temperature);
+  Serial.print("°C, Humidity: ");
+  Serial.print(humidity);
+  Serial.println("%");
 
-    String data = String(prev_temp) + "C, " + String(prev_humidity) + "%";
+  // Send BLE data
+  if (deviceConnected) {
+    String data = String(temperature) + "C, " + String(humidity) + "%";
     pCharacteristic->setValue(data.c_str());
     pCharacteristic->notify();
-
-    Serial.print("Sent over BLE → Temperature: ");
-    Serial.print(prev_temp);
-    Serial.print("°C, Humidity: ");
-    Serial.print(prev_humidity);
-    Serial.println("%");
+    Serial.println("📡 Data sent over BLE!");
   }
 
-  if (!deviceConnected && oldDeviceConnected) {
-    delay(500);
-    pServer->startAdvertising();
-  }
-
-  oldDeviceConnected = deviceConnected;
-
-  delay(2000);  // Wait 2 seconds before next reading
+  delay(2000);  // Wait before next reading
 }
